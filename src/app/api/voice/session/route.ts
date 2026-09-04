@@ -5,13 +5,14 @@ const sessionRequestSchema = z.object({
   language: z.enum(["en", "sw"]).default("en"),
 });
 
+const defaultTokenUrl = "https://agents.assemblyai.com/v1/token";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   const apiKey = process.env.ASSEMBLYAI_API_KEY;
-  const tokenUrl = process.env.ASSEMBLYAI_VOICE_AGENT_TOKEN_URL;
+  const tokenUrl = process.env.ASSEMBLYAI_VOICE_AGENT_TOKEN_URL || defaultTokenUrl;
 
-  if (!apiKey || !tokenUrl) {
+  if (!apiKey) {
     return NextResponse.json(
       { error: "Voice service is not configured" },
       { status: 503 },
