@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import AuthPanel from "./auth-panel";
+import { analyzeIncident } from "@/lib/incident-analysis";
 
 type Report = {
   category: string;
@@ -29,6 +30,7 @@ export default function Home() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [followUpQuestion, setFollowUpQuestion] = useState("");
   const [isFollowUp, setIsFollowUp] = useState(false);
+  const [isAdditionalInfo, setIsAdditionalInfo] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -56,7 +58,14 @@ export default function Home() {
     return `You mentioned ${summary}${ending}. What is the exact location or nearest landmark?`;
   }
 
-  async function startListening(followUp = isFollowUp) {
+  function handleListenPress() {
+    if (isListening || isTranscribing) return;
+    const collectingAdditionalInfo = isFollowUp && !isAdditionalInfo && transcript.trim().length >= 10;
+    if (collectingAdditionalInfo) setIsAdditionalInfo(true);
+    void startListening(isFollowUp, collectingAdditionalInfo);
+  }
+
+  async function startListening(followUp = isFollowUp, collectingAdditionalInfo = isAdditionalInfo) {
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
       setSubmissionError("Microphone recording is not supported in this browser.");
       return;
@@ -81,7 +90,7 @@ export default function Home() {
         const recordingType = recorder.mimeType.startsWith("audio/") ? recorder.mimeType : "audio/webm";
         const recording = new Blob(audioChunksRef.current, { type: recordingType });
         const extension = recording.type.includes("mp4") ? "mp4" : recording.type.includes("ogg") ? "ogg" : "webm";
-        void transcribeRecording(recording, `sauti-report.${extension}`, followUp);
+        void transcribeRecording(recording, `sauti-report.${extension}`, followUp, collectingAdditionalInfo);
       };
       mediaStreamRef.current = stream;
       mediaRecorderRef.current = recorder;
@@ -104,7 +113,7 @@ export default function Home() {
     setIsListening(false);
   }
 
-  async function transcribeRecording(recording: Blob, filename: string, followUp: boolean) {
+  async function transcribeRecording(recording: Blob, filename: string, followUp: boolean, collectingAdditionalInfo: boolean) {
     if (!recording.size) return;
     setIsTranscribing(true);
     const formData = new FormData();
@@ -125,10 +134,16 @@ export default function Home() {
         const questionResult: { question?: string; error?: string } = await questionResponse.json();
         const question = questionResult.question ?? createFallbackQuestion(transcriptRef.current);
         setFollowUpQuestion(question);
+        speakResponse(`I heard: ${transcriptRef.current}. ${question}`);
+      } else if (!collectingAdditionalInfo) {
+        reportTranscriptRef.current = `${reportTranscriptRef.current} ${transcriptRef.current}`.trim();
+        const question = "Thank you. Is there any other information you would like to add?";
+        setFollowUpQuestion(question);
         speakResponse(question);
       } else {
         reportTranscriptRef.current = `${reportTranscriptRef.current} ${transcriptRef.current}`.trim();
         setFollowUpQuestion("");
+        speakResponse("Thank you. I have all the information I need. Your report is ready to submit.");
       }
     } catch (error) {
       setSubmissionError(error instanceof Error ? error.message : "Unable to transcribe recording");
@@ -149,20 +164,30 @@ export default function Home() {
       setIsFollowUp(true);
       setTranscript("");
       transcriptRef.current = "";
-      startListening(true);
+      void startListening(true, false);
+      return;
+    }
+
+    if (!isAdditionalInfo) {
+      setIsAdditionalInfo(true);
+      setTranscript("");
+      transcriptRef.current = "";
+      void startListening(true, true);
       return;
     }
 
     const completeTranscript = reportTranscriptRef.current.trim();
+    const analysis = analyzeIncident(completeTranscript);
     try {
       const response = await fetch("/api/incidents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: completeTranscript.slice(0, 120),
+          title: analysis.title,
           description: completeTranscript,
-          category: "OTHER",
-          severity: "MEDIUM",
+          category: analysis.category,
+          severity: analysis.severity,
+          location_name: analysis.location_name,
           language: "en",
           transcript: completeTranscript,
         }),
@@ -178,10 +203,11 @@ export default function Home() {
       setTranscript("");
       setFollowUpQuestion("");
       setIsFollowUp(false);
+      setIsAdditionalInfo(false);
       reportTranscriptRef.current = "";
       window.speechSynthesis?.cancel();
       setReports((current) => [
-        { category: "OTHER", title: completeTranscript.slice(0, 48), location: "Community report", priority: "Medium", status: "Open", time: "Just now" },
+        { category: analysis.category, title: analysis.title, location: analysis.location_name ?? "Community report", priority: analysis.severity === "CRITICAL" || analysis.severity === "HIGH" ? "High" : analysis.severity === "LOW" ? "Low" : "Medium", status: "Open", time: "Just now" },
         ...current,
       ]);
     } catch (error) {
@@ -192,7 +218,7 @@ export default function Home() {
   return (
     <main className="app-shell">
       <nav className="topbar"><a className="brand" href="#top"><span className="brand-mark">S</span> SAUTI <span className="brand-country">/ KE</span></a><div className="nav-links"><a href="#reports">Community reports</a><a href="#how-it-works">How it works</a><button className="language-button">EN <span>/</span> SW</button></div><AuthPanel /></nav>
-      <section className="hero" id="top"><div className="hero-copy"><p className="eyebrow"><span className="live-dot" /> COMMUNITY LISTENING POST · KISII COUNTY</p><h1>Your voice<br /><em>moves things.</em></h1><p className="hero-intro">Report what matters in your community. Speak naturally in English or Swahili and SAUTI will turn your words into action.</p><div className="trust-row"><span>◎</span> Built for every voice <i /> <span>⌁</span> Private by design</div></div><div className={`voice-panel ${isListening ? "is-listening" : ""}`}><div className="panel-top"><span>{isListening ? (isFollowUp ? "FOLLOW-UP QUESTION" : "SAUTI IS LISTENING") : isTranscribing ? "SAUTI IS TRANSCRIBING" : "READY WHEN YOU ARE"}</span><span className="panel-time">{isListening ? `00:${String(elapsed).padStart(2, "0")}` : "01"}</span></div><div className="waveform" aria-hidden="true">{Array.from({ length: 25 }).map((_, index) => <span key={index} style={{ "--bar": `${18 + ((index * 17) % 44)}px` } as React.CSSProperties} />)}</div><p className="follow-up-prompt">{isFollowUp && followUpQuestion}</p><button className="listen-button" onClick={isListening ? stopListening : () => { void startListening(); }} disabled={isTranscribing} aria-label={isListening ? "Stop speaking" : "Start speaking"}><span className="mic-icon">{isListening ? "■" : "◉"}</span><span>{isListening ? "TAP TO REVIEW" : isTranscribing ? "TRANSCRIBING" : "HOLD TO SPEAK"}</span><span className="button-arrow">↗</span></button><button className="submit-voice-button" onClick={submitReport} disabled={isListening || isTranscribing || transcript.length < 10}>{isFollowUp ? "Submit complete report" : "Answer follow-up"}</button><p className="voice-hint">{isListening ? "Speak clearly · tap to review" : isTranscribing ? "AssemblyAI is preparing your response..." : transcript ? `&quot;${transcript}&quot;` : "No forms. No typing. Just speak."}</p></div></section>
+      <section className="hero" id="top"><div className="hero-copy"><p className="eyebrow"><span className="live-dot" /> COMMUNITY LISTENING POST · KISII COUNTY</p><h1>Your voice<br /><em>moves things.</em></h1><p className="hero-intro">Report what matters in your community. Speak naturally in English or Swahili and SAUTI will turn your words into action.</p><div className="trust-row"><span>◎</span> Built for every voice <i /> <span>⌁</span> Private by design</div></div><div className={`voice-panel ${isListening ? "is-listening" : ""}`}><div className="panel-top"><span>{isListening ? (isAdditionalInfo ? "ADDITIONAL INFORMATION" : isFollowUp ? "FOLLOW-UP QUESTION" : "SAUTI IS LISTENING") : isTranscribing ? "SAUTI IS TRANSCRIBING" : "READY WHEN YOU ARE"}</span><span className="panel-time">{isListening ? `00:${String(elapsed).padStart(2, "0")}` : "01"}</span></div><div className="waveform" aria-hidden="true">{Array.from({ length: 25 }).map((_, index) => <span key={index} style={{ "--bar": `${18 + ((index * 17) % 44)}px` } as React.CSSProperties} />)}</div><p className="follow-up-prompt">{isFollowUp && followUpQuestion}</p><button className="listen-button" onPointerDown={handleListenPress} onPointerUp={stopListening} onPointerCancel={stopListening} disabled={isTranscribing} aria-label={isListening ? "Release to stop speaking" : "Press and hold to speak"}><span className="mic-icon">{isListening ? "■" : "◉"}</span><span>{isListening ? "RELEASE TO REVIEW" : isTranscribing ? "TRANSCRIBING" : "HOLD TO SPEAK"}</span><span className="button-arrow">↗</span></button><button className="submit-voice-button" onClick={submitReport} disabled={isListening || isTranscribing || transcript.length < 10}>{!isFollowUp ? "Answer follow-up" : !isAdditionalInfo ? "Answer: any other information?" : "Submit complete report"}</button><p className="voice-hint">{isListening ? "Keep holding while you speak" : isTranscribing ? "AssemblyAI is preparing your response..." : transcript ? `&quot;${transcript}&quot;` : "No forms. No typing. Just speak."}</p></div></section>
       <section className="activity-section" id="reports"><div className="section-heading"><div><p className="eyebrow">LIVE FROM THE COMMUNITY</p><h2>What people are saying</h2></div><button className="see-all">View all reports <span>↗</span></button></div><div className="content-grid"><div className="reports-list">{reports.slice(0, 3).map((report, index) => <article className="report-row" key={`${report.title}-${index}`}><div className={`report-icon ${report.category.toLowerCase()}`}>{report.category === "WATER" ? "≈" : report.category === "ROADS" ? "+" : "♧"}</div><div className="report-details"><div className="report-meta"><span>{report.category}</span><time>{report.time}</time></div><h3>{report.title}</h3><p><span>⌖</span> {report.location}</p></div><div className="report-status"><span className={`priority ${report.priority.toLowerCase()}`}><i /> {report.priority}</span><span className={`status ${report.status.toLowerCase()}`}>{report.status}</span></div></article>)}</div><div className="map-card"><div className="map-header"><span>REPORTS NEAR YOU</span><span className="map-live"><i /> LIVE</span></div><div className="map-art"><div className="map-road road-one" /><div className="map-road road-two" /><div className="map-road road-three" /><span className="map-pin pin-one">+</span><span className="map-pin pin-two">+</span><span className="map-pin pin-three">+</span><div className="map-label"><strong>Kisii County</strong><span>3 active reports</span></div></div></div></div></section>
       <section className="how-section" id="how-it-works"><p className="eyebrow">ONE CONVERSATION</p><h2>From speaking<br /><em>to solving.</em></h2><div className="steps"><div><b>01</b><strong>Speak freely</strong><p>Tell SAUTI what you see, in the language that feels natural.</p></div><div><b>02</b><strong>We make sense of it</strong><p>Our AI asks the right follow-up questions and finds the details.</p></div><div><b>03</b><strong>Action starts here</strong><p>Your report reaches the right people, with a reference number to follow.</p></div></div></section>
       {(isListening || isTranscribing) && <div className="transcript-toast"><span className="toast-dot" /><div><small>{isTranscribing ? "ASSEMBLYAI RESPONSE" : "MICROPHONE INPUT"}</small><p>&quot;{transcript || (isTranscribing ? "Transcribing your recording..." : "Listening...")}&quot;</p></div><button onClick={isListening ? stopListening : () => setIsTranscribing(false)} aria-label="Close transcript">×</button></div>}

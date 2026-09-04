@@ -34,7 +34,8 @@ export async function POST(request: Request) {
       },
       { status: 201 },
     );
-  } catch {
+  } catch (error) {
+    console.error("Incident creation failed", error);
     return NextResponse.json({ error: "Unable to save incident right now" }, { status: 503 });
   }
 }
