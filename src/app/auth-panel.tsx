@@ -14,7 +14,12 @@ export default function AuthPanel() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    const supabase = getSupabaseBrowserClient();
+    let supabase;
+    try {
+      supabase = getSupabaseBrowserClient();
+    } catch {
+      return;
+    }
     void supabase.auth.getUser().then(({ data }) => setUser(data.user));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
