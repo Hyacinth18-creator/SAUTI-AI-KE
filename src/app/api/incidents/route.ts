@@ -3,22 +3,28 @@ import { createIncident, listIncidents } from "@/lib/incidents";
 import { incidentInputSchema } from "@/lib/incident-validation";
 
 export async function GET() {
-  return NextResponse.json({ incidents: listIncidents() });
+  return NextResponse.json({ incidents: await listIncidents() });
 }
 
 export async function POST(request: Request) {
+  let body: unknown;
   try {
-    const body: unknown = await request.json();
-    const result = incidentInputSchema.safeParse(body);
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
+  }
 
-    if (!result.success) {
-      return NextResponse.json(
-        { error: "Invalid incident details", details: result.error.flatten().fieldErrors },
-        { status: 400 },
-      );
-    }
+  const result = incidentInputSchema.safeParse(body);
 
-    const incident = createIncident(result.data);
+  if (!result.success) {
+    return NextResponse.json(
+      { error: "Invalid incident details", details: result.error.flatten().fieldErrors },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const incident = await createIncident(result.data);
     return NextResponse.json(
       {
         success: true,
@@ -29,6 +35,6 @@ export async function POST(request: Request) {
       { status: 201 },
     );
   } catch {
-    return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
+    return NextResponse.json({ error: "Unable to save incident right now" }, { status: 503 });
   }
 }

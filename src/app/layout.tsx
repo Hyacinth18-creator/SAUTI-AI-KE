@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SAUTI AI | Your voice moves things",
-  description: "Report what matters in your community. SAUTI turns your voice into action.",
+  title: "SAUTI / Your voice moves things",
+  description: "A voice-first community issue reporting platform for Kenya.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
