@@ -36,6 +36,10 @@ export async function POST(request: Request) {
     );
   } catch (error) {
     console.error("Incident creation failed", error);
-    return NextResponse.json({ error: "Unable to save incident right now" }, { status: 503 });
+    const message = error instanceof Error ? error.message : "Unknown database error";
+    return NextResponse.json(
+      { error: "Unable to save incident right now", code: message.includes("not configured") ? "SUPABASE_NOT_CONFIGURED" : "DATABASE_INSERT_FAILED" },
+      { status: 503 },
+    );
   }
 }
